@@ -206,7 +206,7 @@ extension CMVideoCodecType {
             return "esds"
         case kCMVideoCodecType_H264:
             return "avcC"
-        case kCMVideoCodecType_HEVC:
+        case kCMVideoCodecType_HEVC, kCMVideoCodecType_DolbyVisionHEVC:
             return "hvcC"
         case kCMVideoCodecType_VP9:
             return "vpcC"

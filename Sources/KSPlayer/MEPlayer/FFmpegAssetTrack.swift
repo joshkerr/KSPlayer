@@ -133,7 +133,7 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         self.codecpar = codecpar
         bitRate = codecpar.bit_rate
         // codec_tag byte order is LSB first CMFormatDescription.MediaSubType(rawValue: codecpar.codec_tag.bigEndian)
-        let codecType = codecpar.codec_id.mediaSubType
+        var codecType = codecpar.codec_id.mediaSubType
         var codecName = ""
         if let descriptor = avcodec_descriptor_get(codecpar.codec_id) {
             codecName += String(cString: descriptor.pointee.name)
@@ -166,11 +166,15 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
         } else if codecpar.codec_type == AVMEDIA_TYPE_VIDEO {
             audioDescriptor = nil
             mediaType = .video
+            // Kept in a local too: `self.dovi` can't be read until every
+            // stored property is initialised, and the codec type below
+            // needs it before `formatDescription` is set.
+            var doviRecord: DOVIDecoderConfigurationRecord?
             if codecpar.nb_coded_side_data > 0, let sideDatas = codecpar.coded_side_data {
                 for i in 0 ..< codecpar.nb_coded_side_data {
                     let sideData = sideDatas[Int(i)]
                     if sideData.type == AV_PKT_DATA_DOVI_CONF {
-                        dovi = sideData.data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
+                        doviRecord = sideData.data.withMemoryRebound(to: DOVIDecoderConfigurationRecord.self, capacity: 1) { $0 }.pointee
                     } else if sideData.type == AV_PKT_DATA_DISPLAYMATRIX {
                         let matrix = sideData.data.withMemoryRebound(to: Int32.self, capacity: 1) { $0 }
                         let rawRotation = -av_display_rotation_get(matrix)
@@ -219,6 +223,16 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 }
                 isConvertNALSize = false
             }
+            // Dolby Vision profile 5 carries IPTPQc2 samples that only a
+            // Dolby Vision decoder maps to real colour; decoded as plain
+            // HEVC they show as a magenta/green cast. Describe the track as
+            // 'dvh1' with its dvcC record so VideoToolbox applies the RPU
+            // reshaping. A device without a Dolby Vision decoder refuses
+            // the session and the track falls back to FFmpeg decoding.
+            dovi = doviRecord
+            if let doviRecord, doviRecord.dv_profile == 5, codecType == .hevc {
+                codecType = CMFormatDescription.MediaSubType(rawValue: kCMVideoCodecType_DolbyVisionHEVC)
+            }
             let format = AVPixelFormat(rawValue: codecpar.format)
             bitDepth = format.bitDepth
             let fullRange = codecpar.color_range == AVCOL_RANGE_JPEG
@@ -227,11 +241,15 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                 kCVImageBufferChromaLocationTopFieldKey: kCVImageBufferChromaLocation_Left,
                 kCMFormatDescriptionExtension_Depth: format.bitDepth * Int32(format.planeCount),
                 kCMFormatDescriptionExtension_FullRangeVideo: fullRange,
-                codecType.rawValue == kCMVideoCodecType_HEVC ? "EnableHardwareAcceleratedVideoDecoder" : "RequireHardwareAcceleratedVideoDecoder": true,
+                [kCMVideoCodecType_HEVC, kCMVideoCodecType_DolbyVisionHEVC].contains(codecType.rawValue) ? "EnableHardwareAcceleratedVideoDecoder" : "RequireHardwareAcceleratedVideoDecoder": true,
             ]
             // kCMFormatDescriptionExtension_BitsPerComponent
             if let atomsData {
-                dic[kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms] = [codecType.rawValue.avc: atomsData]
+                var atoms: [String: Data] = [codecType.rawValue.avc: atomsData]
+                if codecType.rawValue == kCMVideoCodecType_DolbyVisionHEVC, let doviRecord {
+                    atoms["dvcC"] = doviRecord.atomData
+                }
+                dic[kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms] = atoms
             }
             dic[kCVPixelBufferPixelFormatTypeKey] = format.osType(fullRange: fullRange)
             dic[kCVImageBufferPixelAspectRatioKey] = sar.aspectRatio

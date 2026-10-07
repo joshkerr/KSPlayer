@@ -159,6 +159,19 @@ public struct DOVIDecoderConfigurationRecord {
     public let el_present_flag: UInt8
     public let bl_present_flag: UInt8
     public let dv_bl_signal_compatibility_id: UInt8
+
+    /// The 24-byte payload of a `dvcC` sample entry box (Dolby Vision
+    /// Streams within the ISO Base Media File Format, §2.2): the fields
+    /// above bit-packed, then reserved zeros.
+    public var atomData: Data {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        bytes[0] = dv_version_major
+        bytes[1] = dv_version_minor
+        bytes[2] = (dv_profile << 1) | (dv_level >> 5)
+        bytes[3] = ((dv_level & 0x1F) << 3) | ((rpu_present_flag & 1) << 2) | ((el_present_flag & 1) << 1) | (bl_present_flag & 1)
+        bytes[4] = dv_bl_signal_compatibility_id << 4
+        return Data(bytes)
+    }
 }
 
 public enum FFmpegFieldOrder: UInt8 {
