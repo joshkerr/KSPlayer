@@ -123,8 +123,15 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             if let item = _buffer[Int(i & mask)] {
                 if predicate(item) {
                     result.append(item)
-                    _buffer[Int(i & mask)] = nil
-                    headIndex = i + 1
+                    // The head jumps past every unmatched item before this one
+                    // (e.g. a subtitle that ended before the clock reached it),
+                    // so clear those slots too. Left set, they sit outside
+                    // [head, tail) and push() trips its "value is not nil"
+                    // assertion when the ring wraps onto them.
+                    while headIndex <= i {
+                        _buffer[Int(headIndex & mask)] = nil
+                        headIndex += 1
+                    }
                 }
             } else {
                 assertionFailure("value is nil of index: \(i) headIndex: \(headIndex), tailIndex: \(tailIndex), bufferCount: \(_buffer.count), mask: \(mask)")
